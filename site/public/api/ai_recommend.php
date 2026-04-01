@@ -1,0 +1,543 @@
+<?php
+header('Content-Type: application/json; charset=utf-8');
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+  http_response_code(405);
+  echo json_encode(['ok' => false, 'error' => 'Method not allowed'], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+require_once __DIR__ . '/../../includes/database.php';
+require_once __DIR__ . '/../../includes/exercise_library.php';
+
+function normalizeGenderForVideo(string $gender): string {
+  $g = strtolower(trim($gender));
+  if ($g === 'male' || $g === 'm' || $g === 'man' || $g === 'boy' || $g === 'ذكر') return 'male';
+  if ($g === 'female' || $g === 'f' || $g === 'woman' || $g === 'girl' || $g === 'انثى' || $g === 'أنثى') return 'female';
+  return 'male';
+}
+
+function normalizeGoal(string $goal): string {
+  return $goal === 'fitness' ? 'general_fitness' : $goal;
+}
+
+function normalizeHealthCondition(string $healthCondition): string {
+  $hc = strtolower(trim($healthCondition));
+  if ($hc === 'back_pain') return 'injury';
+  if ($hc === 'joint_pain') return 'joints';
+  // Preserve specific chronic subtypes for safety filters + notes
+  if (in_array($hc, ['diabetes', 'heart', 'pressure', 'asthma', 'chronic', 'joints', 'injury', 'normal'], true)) {
+    return $hc;
+  }
+  return $hc;
+}
+
+function mapDbDifficulty(string $difficulty): string {
+  $d = strtolower(trim($difficulty));
+  if ($d === 'easy') return 'سهل';
+  if ($d === 'beginner') return 'سهل';
+  if ($d === 'medium') return 'متوسط';
+  if ($d === 'hard') return 'صعب';
+  return $difficulty;
+}
+
+function healthConditionTips(string $healthCondition): array {
+  $hc = normalizeHealthCondition($healthCondition);
+  $tips = [];
+
+  if ($hc === 'diabetes') {
+    $tips[] = 'راقب مستوى السكر قبل وبعد التمرين';
+    $tips[] = 'تجنب الشدة العالية جداً وابدأ بشكل تدريجي';
+    $tips[] = 'احتفظ بمصدر سكر سريع بالقرب منك';
+  } elseif ($hc === 'heart') {
+    $tips[] = 'تمارين خفيفة إلى متوسطة فقط وتجنب الجهد المفاجئ';
+    $tips[] = 'توقف فوراً عند ألم صدر/دوخة/ضيق نفس واستشر طبيب';
+  } elseif ($hc === 'pressure') {
+    $tips[] = 'لا تمسك النفس أثناء التمرين';
+    $tips[] = 'تجنب القفز العنيف والتمارين عالية الشدة';
+  } elseif ($hc === 'asthma') {
+    $tips[] = 'احتفظ بجهاز الاستنشاق بالقرب منك';
+    $tips[] = 'ابدأ بتمارين تنفس وتجنب الهواء البارد أو الملوث';
+  } elseif ($hc === 'joints') {
+    $tips[] = 'تجنب القفز والهبوط القوي';
+    $tips[] = 'ركز على تمارين ثابتة ومنخفضة التأثير';
+  } elseif ($hc === 'chronic') {
+    $tips[] = 'اختر تمارين خفيفة إلى متوسطة فقط';
+    $tips[] = 'تجنب القفز العنيف والتمارين عالية الشدة';
+  }
+
+  return $tips;
+}
+
+function teenGoalKey(string $goal): string {
+  $g = strtolower(trim($goal));
+  if ($g === 'muscle_gain' || $g === 'muscle') return 'muscle';
+  if ($g === 'weight_loss') return 'weight_loss';
+  if ($g === 'flexibility') return 'balance';
+  if ($g === 'general_fitness') return 'mix';
+  return $g;
+}
+
+function teenDifficultyLabel(string $difficulty): string {
+  $d = strtolower(trim($difficulty));
+  if ($d === 'easy') return 'سهل';
+  if ($d === 'medium') return 'متوسط';
+  if ($d === 'hard') return 'صعب';
+  return $difficulty;
+}
+
+function fetchExercisesFromDb(?mysqli $conn, string $goal, string $healthCondition, int $limit): array {
+  if (!$conn) return [];
+
+  $goal = normalizeGoal($goal);
+  $healthCondition = normalizeHealthCondition($healthCondition);
+
+  $sql = "SELECT name, difficulty, description, image_url, video_url\n"
+    . "FROM exercises\n"
+    . "WHERE ((goal = ? AND health_condition = ?)\n"
+    . "   OR (goal = ?)\n"
+    . "   OR (health_condition = ?)\n"
+    . "   OR (health_condition = 'safe'))\n"
+    . "LIMIT ?";
+
+  $stmt = $conn->prepare($sql);
+  if (!$stmt) return [];
+
+  $stmt->bind_param('ssssi', $goal, $healthCondition, $goal, $healthCondition, $limit);
+  if (!$stmt->execute()) {
+    $stmt->close();
+    return [];
+  }
+
+  $res = $stmt->get_result();
+  if (!$res) {
+    $stmt->close();
+    return [];
+  }
+
+  $rows = [];
+  while ($row = $res->fetch_assoc()) {
+    $rows[] = $row;
+  }
+  $stmt->close();
+  return $rows;
+}
+
+$raw = file_get_contents('php://input');
+$payload = json_decode($raw, true);
+
+if (!is_array($payload) || !isset($payload['data']) || !is_array($payload['data'])) {
+  http_response_code(400);
+  echo json_encode(['ok' => false, 'error' => 'Invalid payload'], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+$data = $payload['data'];
+
+$name = trim((string)($data['name'] ?? ''));
+$age = (int)($data['age'] ?? 0);
+$gender = (string)($data['gender'] ?? '');
+$weight = (float)($data['weight'] ?? 0);
+$height = (float)($data['height'] ?? 0);
+$fitnessLevel = (string)($data['fitnessLevel'] ?? '');
+$healthCondition = (string)($data['healthCondition'] ?? '');
+$goal = (string)($data['goal'] ?? '');
+$timeAvailable = (string)($data['timeAvailable'] ?? '');
+
+$healthCondition = normalizeHealthCondition($healthCondition);
+
+if ($weight <= 0 || $height <= 0) {
+  http_response_code(400);
+  echo json_encode(['ok' => false, 'error' => 'Missing weight/height'], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+$h = $height / 100.0;
+$bmiVal = $weight / ($h * $h);
+$bmi = number_format($bmiVal, 1, '.', '');
+
+// BMI Analysis
+if ($bmi < 18.5) {
+  $bmiAnalysis = ['status' => 'نحيف', 'className' => 'text-primary', 'recommendation' => 'تحتاج لتمارين بناء عضلات مع تغذية جيدة'];
+} elseif ($bmi < 25) {
+  $bmiAnalysis = ['status' => 'وزن طبيعي', 'className' => 'text-success', 'recommendation' => 'وزنك مثالي! حافظ على لياقتك بتمارين متوازنة'];
+} elseif ($bmi < 30) {
+  $bmiAnalysis = ['status' => 'وزن زائد', 'className' => 'text-warning', 'recommendation' => 'ركز على تمارين الكارديو وضبط النظام الغذائي'];
+} else {
+  $bmiAnalysis = ['status' => 'سمنة', 'className' => 'text-danger', 'recommendation' => 'ابدأ بتمارين خفيفة منخفضة التأثير واستشر طبيب'];
+}
+
+$limit = ($timeAvailable === '15') ? 3 : (($timeAvailable === '30') ? 5 : 7);
+
+// Teens (12-18): use teen engine directly for dynamic safety + exercises
+if (function_exists('isTeen') && isTeen($age) && function_exists('getTeenExerciseRecommendation')) {
+  $profile = [
+    'age' => $age,
+    'gender' => $gender,
+    'health_condition' => $healthCondition,
+    'fitness_level' => $fitnessLevel,
+    'goal' => teenGoalKey($goal),
+    'time_available' => (int)$timeAvailable
+  ];
+
+  $teenRec = getTeenExerciseRecommendation($profile);
+  $exercises = [];
+  $videoGender = normalizeGenderForVideo($gender);
+  foreach (($teenRec['exercises'] ?? []) as $ex) {
+    if (!is_array($ex)) continue;
+    $exercises[] = [
+      'name' => (string)($ex['name'] ?? ''),
+      'duration' => (string)($ex['duration'] ?? ''),
+      'difficulty' => teenDifficultyLabel((string)($ex['difficulty'] ?? '')),
+      'image' => '🏋️',
+      'benefits' => (string)($ex['benefits'] ?? ''),
+      'aiReason' => 'اقتراح حسب الفئة العمرية 12-18 مع قواعد الأمان',
+      'imageUrl' => '',
+      'videoUrl' => function_exists('exerciseLibraryVideoUrl') ? (string)exerciseLibraryVideoUrl($ex, $videoGender) : (string)($ex['video_url'] ?? '')
+    ];
+  }
+
+  // Teens: use teen engine safety notes only to avoid mixing/duplicating tips
+  $tips = (array)($teenRec['safety_notes'] ?? []);
+
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($exercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 8)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+// Adults (18-30): use adult engine directly for deterministic scenarios + safety notes
+if (function_exists('isAdult') && isAdult($age) && function_exists('getAdultExerciseRecommendation')) {
+  $profile = [
+    'age' => $age,
+    'gender' => $gender,
+    'health_condition' => $healthCondition,
+    'fitness_level' => $fitnessLevel,
+    'goal' => teenGoalKey($goal),
+    'time_available' => (int)$timeAvailable
+  ];
+
+  $adultRec = getAdultExerciseRecommendation($profile);
+  $exercises = [];
+  $videoGender = normalizeGenderForVideo($gender);
+  foreach (($adultRec['exercises'] ?? []) as $ex) {
+    if (!is_array($ex)) continue;
+    $exercises[] = [
+      'name' => (string)($ex['name'] ?? ''),
+      'duration' => (string)($ex['duration'] ?? ''),
+      'difficulty' => teenDifficultyLabel((string)($ex['difficulty'] ?? '')),
+      'image' => '🏋️',
+      'benefits' => (string)($ex['benefits'] ?? ''),
+      'aiReason' => 'اقتراح حسب الفئة العمرية 18-30 مع قواعد الأمان',
+      'imageUrl' => '',
+      'videoUrl' => function_exists('exerciseLibraryVideoUrl') ? (string)exerciseLibraryVideoUrl($ex, $videoGender) : (string)($ex['video_url'] ?? '')
+    ];
+  }
+
+  $tips = (array)($adultRec['safety_notes'] ?? []);
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($exercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 8)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+// Mature adults (30-50): use mature engine directly for deterministic scenarios + safety notes
+if (function_exists('isMature') && isMature($age) && function_exists('getMatureExerciseRecommendation')) {
+  $profile = [
+    'age' => $age,
+    'gender' => $gender,
+    'health_condition' => $healthCondition,
+    'fitness_level' => $fitnessLevel,
+    'goal' => teenGoalKey($goal),
+    'time_available' => (int)$timeAvailable
+  ];
+
+  $matureRec = getMatureExerciseRecommendation($profile);
+  $exercises = [];
+  $videoGender = normalizeGenderForVideo($gender);
+  foreach (($matureRec['exercises'] ?? []) as $ex) {
+    if (!is_array($ex)) continue;
+    $exercises[] = [
+      'name' => (string)($ex['name'] ?? ''),
+      'duration' => (string)($ex['duration'] ?? ''),
+      'difficulty' => teenDifficultyLabel((string)($ex['difficulty'] ?? '')),
+      'image' => '🏋️',
+      'benefits' => (string)($ex['benefits'] ?? ''),
+      'aiReason' => 'اقتراح حسب الفئة العمرية 30-50 مع قواعد الأمان',
+      'imageUrl' => '',
+      'videoUrl' => function_exists('exerciseLibraryVideoUrl') ? (string)exerciseLibraryVideoUrl($ex, $videoGender) : (string)($ex['video_url'] ?? '')
+    ];
+  }
+
+  $tips = (array)($matureRec['safety_notes'] ?? []);
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($exercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 8)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+// Seniors (50+): use senior engine directly for deterministic scenarios + safety notes
+if (function_exists('isSenior') && isSenior($age) && function_exists('getSeniorExerciseRecommendation')) {
+  $profile = [
+    'age' => $age,
+    'gender' => $gender,
+    'health_condition' => $healthCondition,
+    'fitness_level' => $fitnessLevel,
+    'goal' => teenGoalKey($goal),
+    'time_available' => (int)$timeAvailable
+  ];
+
+  $seniorRec = getSeniorExerciseRecommendation($profile);
+  $exercises = [];
+  $videoGender = normalizeGenderForVideo($gender);
+  foreach (($seniorRec['exercises'] ?? []) as $ex) {
+    if (!is_array($ex)) continue;
+    $exercises[] = [
+      'name' => (string)($ex['name'] ?? ''),
+      'duration' => (string)($ex['duration'] ?? ''),
+      'difficulty' => teenDifficultyLabel((string)($ex['difficulty'] ?? '')),
+      'image' => '🏋️',
+      'benefits' => (string)($ex['benefits'] ?? ''),
+      'aiReason' => 'اقتراح حسب الفئة العمرية 50+ مع قواعد أمان طبية',
+      'imageUrl' => '',
+      'videoUrl' => function_exists('exerciseLibraryVideoUrl') ? (string)exerciseLibraryVideoUrl($ex, $videoGender) : (string)($ex['video_url'] ?? '')
+    ];
+  }
+
+  $tips = (array)($seniorRec['safety_notes'] ?? []);
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($exercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 8)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+$conn = db();
+$rows = fetchExercisesFromDb($conn, $goal, $healthCondition, $limit);
+if (count($rows) > 0) {
+  $durationByTime = [
+    '15' => '10-15 دقيقة',
+    '30' => '20-30 دقيقة',
+    '60' => '30-45 دقيقة'
+  ];
+  $dur = $durationByTime[$timeAvailable] ?? $durationByTime['30'];
+
+  $exercises = [];
+  foreach ($rows as $r) {
+    $exercises[] = [
+      'name' => (string)($r['name'] ?? ''),
+      'duration' => $dur,
+      'difficulty' => mapDbDifficulty((string)($r['difficulty'] ?? '')),
+      'image' => '🏋️',
+      'benefits' => (string)($r['description'] ?? ''),
+      'aiReason' => 'اقتراح من قاعدة بيانات تمارين موثوقة',
+      'imageUrl' => (string)($r['image_url'] ?? ''),
+      'videoUrl' => (string)($r['video_url'] ?? '')
+    ];
+  }
+
+  $tips = [];
+  $tips[] = 'ابدأ بإحماء 5-10 دقائق قبل التمرين';
+  $tips[] = 'حافظ على شرب الماء بشكل منتظم';
+  if ($healthCondition !== 'normal') $tips[] = 'لو ظهر ألم غير طبيعي توقف واستشر مختص';
+  $tips = array_merge($tips, healthConditionTips($healthCondition));
+
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($exercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 5)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+// Generate personalized exercises based on user data
+$libraryExercises = selectExercisesFromLibrary($age, $gender, $healthCondition, $limit);
+if (count($libraryExercises) > 0) {
+  $tips = [];
+  $tips[] = 'ابدأ بإحماء 5-10 دقائق قبل التمرين';
+  $tips[] = 'حافظ على شرب الماء بشكل منتظم';
+  if ($healthCondition !== 'normal') $tips[] = 'لو ظهر ألم غير طبيعي توقف واستشر مختص';
+  $tips = array_merge($tips, healthConditionTips($healthCondition));
+
+  $warmup = selectWarmupFromLibrary($gender, 2);
+
+  echo json_encode([
+    'ok' => true,
+    'results' => [
+      'bmi' => $bmi,
+      'bmiAnalysis' => $bmiAnalysis,
+      'warmup' => $warmup,
+      'exercises' => array_slice($libraryExercises, 0, $limit),
+      'tips' => array_slice($tips, 0, 5)
+    ]
+  ], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+$exercises = [];
+
+// Define exercise templates
+$templates = [
+  'walking' => ['name' => 'المشي السريع', 'image' => '🚶', 'benefits' => 'حرق السعرات وتحسين صحة القلب'],
+  'swimming' => ['name' => 'السباحة', 'image' => '🏊', 'benefits' => 'تمرين شامل منخفض الضغط على المفاصل'],
+  'cycling' => ['name' => 'ركوب الدراجة', 'image' => '🚴', 'benefits' => 'تقوية الساقين وتحسين اللياقة القلبية'],
+  'pushups' => ['name' => 'تمارين الضغط', 'image' => '💪', 'benefits' => 'تقوية الصدر والذراعين والأكتاف'],
+  'squats' => ['name' => 'السكوات', 'image' => '🦵', 'benefits' => 'تقوية عضلات الساقين والمؤخرة'],
+  'plank' => ['name' => 'البلانك', 'image' => '🧘', 'benefits' => 'تقوية عضلات البطن والكور'],
+  'yoga' => ['name' => 'اليوغا', 'image' => '🧘‍♀️', 'benefits' => 'تحسين المرونة والاسترخاء'],
+  'stretching' => ['name' => 'تمارين التمدد', 'image' => '🤸', 'benefits' => 'زيادة المرونة ومنع الإصابات'],
+  'resistance' => ['name' => 'تمارين المقاومة', 'image' => '🏋️', 'benefits' => 'بناء العضلات وشد الجسم'],
+  'water' => ['name' => 'تمارين مائية', 'image' => '💧', 'benefits' => 'آمن تماماً للمفاصل وممتاز للتأهيل']
+];
+
+// Select exercises based on conditions
+$selected = [];
+
+if ($healthCondition === 'joint_pain') {
+  // Joint-safe exercises
+  $selected = ['swimming', 'water', 'cycling', 'walking'];
+  $difficulty = 'سهل';
+} elseif ($healthCondition === 'chronic') {
+  // Low intensity for chronic conditions
+  $selected = ['walking', 'yoga', 'stretching', 'swimming'];
+  $difficulty = 'سهل';
+} elseif ($healthCondition === 'injury') {
+  // Gentle recovery exercises
+  $selected = ['stretching', 'yoga', 'walking', 'water'];
+  $difficulty = 'سهل جداً';
+} else {
+  // Normal health - can do more variety
+  if ($goal === 'weight_loss') {
+    $selected = ['walking', 'cycling', 'swimming', 'pushups', 'squats'];
+    $difficulty = ($fitnessLevel === 'beginner') ? 'سهل' : (($fitnessLevel === 'intermediate') ? 'متوسط' : 'صعب');
+  } elseif ($goal === 'muscle_gain') {
+    $selected = ['pushups', 'squats', 'plank', 'resistance', 'cycling'];
+    $difficulty = ($fitnessLevel === 'beginner') ? 'سهل' : (($fitnessLevel === 'intermediate') ? 'متوسط' : 'صعب');
+  } elseif ($goal === 'flexibility') {
+    $selected = ['yoga', 'stretching', 'swimming', 'walking'];
+    $difficulty = 'سهل';
+  } else {
+    $selected = ['walking', 'pushups', 'plank', 'yoga', 'cycling'];
+    $difficulty = ($fitnessLevel === 'beginner') ? 'سهل' : 'متوسط';
+  }
+}
+
+// Set duration based on time available
+$durations = [
+  '15' => ['15 دقيقة', '3 مجموعات × 8', '2 × 30 ثانية', '10 دقائق'],
+  '30' => ['25 دقيقة', '3 مجموعات × 12', '3 × 45 ثانية', '20 دقيقة'],
+  '60' => ['40 دقيقة', '4 مجموعات × 15', '4 × 60 ثانية', '30 دقيقة']
+];
+$durationSet = $durations[$timeAvailable] ?? $durations['30'];
+
+// Build exercises array
+$count = 0;
+foreach ($selected as $key) {
+  if ($count >= $limit) break;
+  if (!isset($templates[$key])) continue;
+  
+  $ex = $templates[$key];
+  
+  // Determine duration based on exercise type
+  if ($key === 'walking' || $key === 'cycling' || $key === 'swimming') {
+    $dur = $durationSet[0];
+  } elseif ($key === 'pushups' || $key === 'squats' || $key === 'resistance') {
+    $dur = $durationSet[1];
+  } elseif ($key === 'plank') {
+    $dur = $durationSet[2];
+  } else {
+    $dur = $durationSet[3];
+  }
+  
+  // Adjust difficulty for age
+  if ($age >= 50 && $difficulty !== 'سهل جداً') {
+    $difficulty = 'سهل';
+  }
+  
+  // Reason based on goal and health
+  $reasons = [];
+  if ($goal === 'weight_loss') $reasons[] = 'يساعد على حرق السعرات';
+  if ($goal === 'muscle_gain') $reasons[] = 'يدعم بناء العضلات';
+  if ($goal === 'flexibility') $reasons[] = 'يحسن المرونة';
+  if ($healthCondition === 'joint_pain') $reasons[] = 'آمن للمفاصل';
+  if ($healthCondition === 'chronic') $reasons[] = 'شدة مناسبة لحالتك';
+  if ($fitnessLevel === 'beginner') $reasons[] = 'مناسب للمبتدئين';
+  if (count($reasons) === 0) $reasons[] = 'تمرين متوازن للياقة العامة';
+  
+  $exercises[] = [
+    'name' => $ex['name'],
+    'duration' => $dur,
+    'difficulty' => $difficulty,
+    'image' => $ex['image'],
+    'benefits' => $ex['benefits'],
+    'aiReason' => implode(' • ', array_slice($reasons, 0, 2))
+  ];
+  $count++;
+}
+
+// Generate tips
+$tips = [];
+$tips[] = 'اشرب 2-3 لتر ماء يومياً';
+if ($bmi > 25) {
+  $tips[] = 'ابدأ بشدة خفيفة وزد تدريجياً';
+  $tips[] = 'ركز على النظام الغذائي alongside التمارين';
+}
+if ($fitnessLevel === 'beginner') {
+  $tips[] = 'خذ يوم راحة بين كل يومين تمرين';
+  $tips[] = 'لا تهمل الإحماء قبل التمرين';
+}
+if ($healthCondition !== 'normal') {
+  $tips[] = 'استشر طبيبك قبل البدء بأي برنامج';
+}
+$tips[] = 'النوم 7-8 ساعات ضروري لبناء العضلات';
+
+$out = [
+  'bmi' => $bmi,
+  'bmiAnalysis' => $bmiAnalysis,
+  'exercises' => $exercises,
+  'tips' => array_slice($tips, 0, 5)
+];
+
+echo json_encode(['ok' => true, 'results' => $out], JSON_UNESCAPED_UNICODE);
