@@ -6,10 +6,17 @@
 
 // Database credentials - adjust these if needed
 if (!defined('DB_HOST')) {
-    define('DB_HOST', 'localhost');
-    define('DB_USER', 'root');       // default XAMPP user
-    define('DB_PASS', '');           // default XAMPP password (empty)
-    define('DB_NAME', 'fitness_db'); // new database name
+    $envHost = getenv('DB_HOST');
+    $envUser = getenv('DB_USER');
+    $envPass = getenv('DB_PASS');
+    $envName = getenv('DB_NAME');
+    $envPort = getenv('DB_PORT');
+
+    define('DB_HOST', ($envHost !== false && $envHost !== '') ? $envHost : 'localhost');
+    define('DB_USER', ($envUser !== false && $envUser !== '') ? $envUser : 'root');       // default XAMPP user
+    define('DB_PASS', ($envPass !== false) ? $envPass : '');                               // default XAMPP password (empty)
+    define('DB_NAME', ($envName !== false && $envName !== '') ? $envName : 'fitness_db'); // new database name
+    define('DB_PORT', ($envPort !== false && $envPort !== '') ? (int)$envPort : 3306);
 }
 
 /**
@@ -17,7 +24,8 @@ if (!defined('DB_HOST')) {
  * @return mysqli|null
  */
 function getDBConnection() {
-    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+    $port = defined('DB_PORT') ? (int)DB_PORT : 3306;
+    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, $port);
     
     if ($conn->connect_error) {
         // If database doesn't exist, try to create it
@@ -27,7 +35,7 @@ function getDBConnection() {
                 $connTemp->query("CREATE DATABASE IF NOT EXISTS " . DB_NAME . " CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
                 $connTemp->close();
                 // Try connecting again
-                $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+                $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, $port);
             }
         }
     }
