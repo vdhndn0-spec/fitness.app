@@ -15,6 +15,10 @@ fi
 echo "Enabled MPM files:"
 ls -la /etc/apache2/mods-enabled/ | grep -i mpm || true
 
+if [ -f /etc/apache2/apache2.conf ] && ! grep -qE '^[[:space:]]*ServerName[[:space:]]+' /etc/apache2/apache2.conf; then
+  echo "ServerName localhost" >> /etc/apache2/apache2.conf
+fi
+
 sed -i "s/Listen 80/Listen ${PORT_TO_USE}/" /etc/apache2/ports.conf
 sed -i "s/:80/:${PORT_TO_USE}/" /etc/apache2/sites-available/000-default.conf
 
