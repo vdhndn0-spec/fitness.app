@@ -12,10 +12,16 @@ if (!defined('DB_HOST')) {
     $envName = getenv('DB_NAME');
     $envPort = getenv('DB_PORT');
 
+    if ($envHost === false || $envHost === '') $envHost = getenv('MYSQLHOST');
+    if ($envUser === false || $envUser === '') $envUser = getenv('MYSQLUSER');
+    if ($envPass === false) $envPass = getenv('MYSQLPASSWORD');
+    if ($envName === false || $envName === '') $envName = getenv('MYSQLDATABASE');
+    if ($envPort === false || $envPort === '') $envPort = getenv('MYSQLPORT');
+
     define('DB_HOST', ($envHost !== false && $envHost !== '') ? $envHost : 'localhost');
-    define('DB_USER', ($envUser !== false && $envUser !== '') ? $envUser : 'root');       // default XAMPP user
-    define('DB_PASS', ($envPass !== false) ? $envPass : '');                               // default XAMPP password (empty)
-    define('DB_NAME', ($envName !== false && $envName !== '') ? $envName : 'fitness_db'); // new database name
+    define('DB_USER', ($envUser !== false && $envUser !== '') ? $envUser : 'root');
+    define('DB_PASS', ($envPass !== false) ? $envPass : '');
+    define('DB_NAME', ($envName !== false && $envName !== '') ? $envName : 'fitness_db');
     define('DB_PORT', ($envPort !== false && $envPort !== '') ? (int)$envPort : 3306);
 }
 

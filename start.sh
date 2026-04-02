@@ -4,8 +4,14 @@ set -e
 PORT_TO_USE="${PORT:-8080}"
 
 try_db_init() {
-  if [ -z "${DB_HOST:-}" ] || [ -z "${DB_USER:-}" ] || [ -z "${DB_NAME:-}" ]; then
-    echo "DB init: DB_HOST/DB_USER/DB_NAME not set, skipping SQL import"
+  HOST_TO_USE="${DB_HOST:-${MYSQLHOST:-}}"
+  USER_TO_USE="${DB_USER:-${MYSQLUSER:-}}"
+  PASS_TO_USE="${DB_PASS:-${MYSQLPASSWORD:-}}"
+  NAME_TO_USE="${DB_NAME:-${MYSQLDATABASE:-}}"
+  PORT_TO_USE_DB="${DB_PORT:-${MYSQLPORT:-3306}}"
+
+  if [ -z "${HOST_TO_USE}" ] || [ -z "${USER_TO_USE}" ] || [ -z "${NAME_TO_USE}" ]; then
+    echo "DB init: DB_HOST/DB_USER/DB_NAME (or MYSQLHOST/MYSQLUSER/MYSQLDATABASE) not set, skipping SQL import"
     return 0
   fi
 
@@ -19,33 +25,31 @@ try_db_init() {
     return 0
   fi
 
-  DB_PORT_TO_USE="${DB_PORT:-3306}"
-
-  echo "DB init: waiting for MySQL at ${DB_HOST}:${DB_PORT_TO_USE}..."
+  echo "DB init: waiting for MySQL at ${HOST_TO_USE}:${PORT_TO_USE_DB}..."
   i=0
   while [ $i -lt 30 ]; do
-    if MYSQL_PWD="${DB_PASS:-}" mysql --protocol=TCP --connect-timeout=5 -h"${DB_HOST}" -P"${DB_PORT_TO_USE}" -u"${DB_USER}" -e "SELECT 1" >/dev/null 2>&1; then
+    if MYSQL_PWD="${PASS_TO_USE}" mysql --protocol=TCP --connect-timeout=5 -h"${HOST_TO_USE}" -P"${PORT_TO_USE_DB}" -u"${USER_TO_USE}" -e "SELECT 1" >/dev/null 2>&1; then
       break
     fi
     i=$((i + 1))
     sleep 2
   done
 
-  if ! MYSQL_PWD="${DB_PASS:-}" mysql --protocol=TCP --connect-timeout=5 -h"${DB_HOST}" -P"${DB_PORT_TO_USE}" -u"${DB_USER}" -e "SELECT 1" >/dev/null 2>&1; then
+  if ! MYSQL_PWD="${PASS_TO_USE}" mysql --protocol=TCP --connect-timeout=5 -h"${HOST_TO_USE}" -P"${PORT_TO_USE_DB}" -u"${USER_TO_USE}" -e "SELECT 1" >/dev/null 2>&1; then
     echo "DB init: could not connect to MySQL, skipping SQL import"
     return 0
   fi
 
-  MYSQL_PWD="${DB_PASS:-}" mysql --protocol=TCP -h"${DB_HOST}" -P"${DB_PORT_TO_USE}" -u"${DB_USER}" -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >/dev/null 2>&1 || true
+  MYSQL_PWD="${PASS_TO_USE}" mysql --protocol=TCP -h"${HOST_TO_USE}" -P"${PORT_TO_USE_DB}" -u"${USER_TO_USE}" -e "CREATE DATABASE IF NOT EXISTS \`${NAME_TO_USE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >/dev/null 2>&1 || true
 
-  table_count=$(MYSQL_PWD="${DB_PASS:-}" mysql --protocol=TCP -N -s -h"${DB_HOST}" -P"${DB_PORT_TO_USE}" -u"${DB_USER}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo "")
+  table_count=$(MYSQL_PWD="${PASS_TO_USE}" mysql --protocol=TCP -N -s -h"${HOST_TO_USE}" -P"${PORT_TO_USE_DB}" -u"${USER_TO_USE}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${NAME_TO_USE}';" 2>/dev/null || echo "")
   if [ -n "${table_count}" ] && [ "${table_count}" -gt 0 ] 2>/dev/null; then
-    echo "DB init: ${DB_NAME} already has ${table_count} tables, skipping SQL import"
+    echo "DB init: ${NAME_TO_USE} already has ${table_count} tables, skipping SQL import"
     return 0
   fi
 
-  echo "DB init: importing /var/www/html/database/fitness.sql into ${DB_NAME}..."
-  if MYSQL_PWD="${DB_PASS:-}" mysql --protocol=TCP -h"${DB_HOST}" -P"${DB_PORT_TO_USE}" -u"${DB_USER}" "${DB_NAME}" < /var/www/html/database/fitness.sql; then
+  echo "DB init: importing /var/www/html/database/fitness.sql into ${NAME_TO_USE}..."
+  if MYSQL_PWD="${PASS_TO_USE}" mysql --protocol=TCP -h"${HOST_TO_USE}" -P"${PORT_TO_USE_DB}" -u"${USER_TO_USE}" "${NAME_TO_USE}" < /var/www/html/database/fitness.sql; then
     echo "DB init: import done"
   else
     echo "DB init: import failed (continuing to start Apache)"
