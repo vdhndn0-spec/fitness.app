@@ -6,7 +6,10 @@ require_once __DIR__ . '/../public/exercises/teen_exercises.php';
 require_once __DIR__ . '/../public/exercises/adult_exercises.php';
 require_once __DIR__ . '/../public/exercises/mature_exercises.php';
 require_once __DIR__ . '/../public/exercises/senior_exercises.php';
-require_once __DIR__ . '/../public/exercises/warmup.php';
+$warmupFile = __DIR__ . '/../public/exercises/warmup.php';
+if (is_file($warmupFile)) {
+  require_once $warmupFile;
+}
 
 function exerciseLibraryHealthKey(string $healthCondition): string {
   $hc = strtolower(trim($healthCondition));
