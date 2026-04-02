@@ -2,6 +2,8 @@
 $active = 'user_settings';
 require __DIR__ . '/../includes/db.php';
 
+requireLogin();
+
 // Get current user data if logged in
 $currentUser = getCurrentUser();
 $userData = null;

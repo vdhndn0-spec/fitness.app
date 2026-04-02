@@ -7,6 +7,14 @@ require __DIR__ . '/../includes/db.php';
 $error = '';
 $success = '';
 
+$redirect = $_GET['redirect'] ?? '';
+if (!is_string($redirect) || $redirect === '') {
+    $redirect = '';
+}
+if ($redirect !== '' && (preg_match('/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $redirect) || str_starts_with($redirect, '//'))) {
+    $redirect = '';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = trim($_POST['email'] ?? '');
     $data = [
@@ -22,7 +30,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Auto-login and redirect to assessment
         session_start();
         $_SESSION['user_id'] = $result['user_id'];
-        header('Location: assessment.php?new=1');
+        if ($redirect !== '') {
+            header('Location: ' . $redirect);
+        } else {
+            header('Location: assessment.php?new=1');
+        }
         exit;
     } else {
         $error = $result['message'];

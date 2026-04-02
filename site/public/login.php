@@ -6,6 +6,14 @@ require __DIR__ . '/../includes/db.php';
 
 session_start();
 
+$redirect = $_GET['redirect'] ?? '';
+if (!is_string($redirect) || $redirect === '') {
+    $redirect = '';
+}
+if ($redirect !== '' && (preg_match('/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $redirect) || str_starts_with($redirect, '//'))) {
+    $redirect = '';
+}
+
 // Redirect if already logged in
 if (isset($_SESSION['user_id'])) {
     header('Location: index.php');
@@ -23,9 +31,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($result['success']) {
         $_SESSION['user_id'] = $result['user']['id'];
         $_SESSION['username'] = $result['user']['username'];
-        
-        // Check if user has assessment data
-        if (hasUserAssessment($result['user']['id'])) {
+
+        if ($redirect !== '') {
+            header('Location: ' . $redirect);
+        } elseif (hasUserAssessment($result['user']['id'])) {
             header('Location: results.php');
         } else {
             header('Location: assessment.php');

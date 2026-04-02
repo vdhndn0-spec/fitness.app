@@ -342,7 +342,14 @@ function requireLogin() {
     }
     
     if (!isset($_SESSION['user_id'])) {
-        header('Location: login.php');
+        $redirect = $_SERVER['REQUEST_URI'] ?? '';
+        if (!is_string($redirect) || $redirect === '') {
+            $redirect = 'index.php';
+        }
+        if (preg_match('/^[a-zA-Z][a-zA-Z0-9+.-]*:/', $redirect) || str_starts_with($redirect, '//')) {
+            $redirect = 'index.php';
+        }
+        header('Location: login.php?redirect=' . rawurlencode($redirect));
         exit;
     }
 }
