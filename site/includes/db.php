@@ -16,6 +16,7 @@ if (!defined('DB_HOST')) {
     if ($envUser === false || $envUser === '') $envUser = getenv('MYSQLUSER');
     if ($envPass === false) $envPass = getenv('MYSQLPASSWORD');
     if ($envName === false || $envName === '') $envName = getenv('MYSQLDATABASE');
+    if ($envName === false || $envName === '') $envName = getenv('MYSQL_DATABASE');
     if ($envPort === false || $envPort === '') $envPort = getenv('MYSQLPORT');
 
     define('DB_HOST', ($envHost !== false && $envHost !== '') ? $envHost : 'localhost');
@@ -31,26 +32,32 @@ if (!defined('DB_HOST')) {
  */
 function getDBConnection() {
     $port = defined('DB_PORT') ? (int)DB_PORT : 3306;
-    $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, $port);
-    
-    if ($conn->connect_error) {
-        // If database doesn't exist, try to create it
-        if (strpos($conn->connect_error, 'Unknown database') !== false) {
-            $connTemp = new mysqli(DB_HOST, DB_USER, DB_PASS);
-            if (!$connTemp->connect_error) {
-                $connTemp->query("CREATE DATABASE IF NOT EXISTS " . DB_NAME . " CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    try {
+        $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, $port);
+    } catch (mysqli_sql_exception $e) {
+        $msg = $e->getMessage();
+
+        if (stripos($msg, 'Unknown database') !== false) {
+            try {
+                $connTemp = new mysqli(DB_HOST, DB_USER, DB_PASS, '', $port);
+                $connTemp->query("CREATE DATABASE IF NOT EXISTS `" . DB_NAME . "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
                 $connTemp->close();
-                // Try connecting again
                 $conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, $port);
+            } catch (mysqli_sql_exception $e2) {
+                error_log("DB Connection failed: " . $e2->getMessage());
+                return null;
             }
+        } else {
+            error_log("DB Connection failed: " . $msg);
+            return null;
         }
     }
-    
+
     if ($conn->connect_error) {
         error_log("DB Connection failed: " . $conn->connect_error);
         return null;
     }
-    
+
     $conn->set_charset("utf8mb4");
     return $conn;
 }
